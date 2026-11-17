@@ -1,0 +1,170 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function hasValidProfile() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && exists(profilePath(request.auth.uid))
+        && get(profilePath(request.auth.uid)).data.active == true
+        && get(profilePath(request.auth.uid)).data.role in [
+          'ADMIN', 'CASHIER', 'BUYER', 'SALES', 'AUDITOR'
+        ];
+    }
+
+    function hasRole(roles) {
+      return hasValidProfile()
+        && get(profilePath(request.auth.uid)).data.role in roles;
+    }
+
+    function isAdmin() {
+      return hasRole(['ADMIN']);
+    }
+
+    match /users/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() || (
+        isSignedIn()
+        && request.auth.uid == uid
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in ['espoirmpena5@gmail.com', 'mpenaespoir95@gmail.com']
+        && request.resource.data.role == 'ADMIN'
+        && request.resource.data.active == true
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /pending_users/{uid} {
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'name', 'email', 'phone', 'requestedRole', 'createdAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.requestedRole in [
+          'ADMIN', 'CASHIER', 'BUYER', 'SALES', 'AUDITOR'
+        ]
+        && request.resource.data.createdAt == request.time
+        && (
+          !('phone' in request.resource.data)
+          || request.resource.data.phone is string
+        );
+      allow get: if (isSignedIn() && request.auth.uid == uid) || isAdmin();
+      allow list, update, delete: if isAdmin();
+    }
+
+    match /system/{docId} {
+      allow read: if hasValidProfile();
+    }
+
+    match /purchases/{purchaseId} {
+      allow read: if hasValidProfile();
+      allow create, update: if hasRole(['ADMIN', 'CASHIER', 'BUYER']);
+      allow delete: if isAdmin();
+    }
+
+    match /sales/{saleId} {
+      allow read: if hasValidProfile();
+      allow create, update: if hasRole(['ADMIN', 'SALES']);
+      allow delete: if isAdmin();
+    }
+
+    match /stock_movements/{movementId} {
+      allow read: if hasValidProfile();
+      allow create, update: if hasRole(['ADMIN', 'CASHIER', 'BUYER', 'SALES']);
+      allow delete: if isAdmin();
+    }
+
+    match /contacts/{contactId} {
+      allow read: if hasValidProfile();
+      allow create, update: if hasRole(['ADMIN', 'CASHIER', 'BUYER', 'SALES']);
+      allow delete: if isAdmin();
+    }
+
+    match /operations/{operationId} {
+      allow read: if hasValidProfile();
+      allow create, update: if hasRole(['ADMIN', 'CASHIER']);
+      allow delete: if isAdmin();
+    }
+
+    match /accounts/{accountId} {
+      allow read: if hasValidProfile();
+      allow create, update: if hasRole(['ADMIN', 'CASHIER']);
+      allow delete: if isAdmin();
+    }
+
+    match /settings/{settingsId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isAdmin();
+    }
+
+    function isValidDocId(docId) {
+      return docId is string && docId.size() <= 128 && docId.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /tasks/{taskId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /whatsapp_campaigns/{campaignId} {
+      allow get: if hasValidProfile() && isValidDocId(campaignId);
+      allow list: if hasValidProfile();
+      allow create, update: if isValidDocId(campaignId)
+        && hasRole(['ADMIN', 'CASHIER', 'SALES', 'BUYER'])
+        && request.resource.data.id is string
+        && request.resource.data.id.size() <= 128
+        && request.resource.data.reference is string
+        && request.resource.data.reference.size() <= 64
+        && request.resource.data.status in [
+          'scheduled', 'running', 'completed', 'partial', 'paused', 'cancelled', 'failed'
+        ];
+      allow delete: if isAdmin() && isValidDocId(campaignId);
+    }
+
+    match /whatsapp_logs/{logId} {
+      allow get: if hasValidProfile() && isValidDocId(logId);
+      allow list: if hasValidProfile();
+      allow create, update: if isValidDocId(logId)
+        && hasRole(['ADMIN', 'CASHIER', 'SALES', 'BUYER'])
+        && request.resource.data.id is string
+        && request.resource.data.id.size() <= 128
+        && request.resource.data.idempotencyKey is string
+        && request.resource.data.idempotencyKey.size() <= 192
+        && request.resource.data.status in [
+          'pending', 'sending', 'accepted', 'delivered', 'read', 'failed', 'cancelled', 'blocked'
+        ];
+      allow delete: if isAdmin() && isValidDocId(logId);
+    }
+
+    match /whatsapp_audit_logs/{auditId} {
+      allow get: if hasValidProfile() && isValidDocId(auditId);
+      allow list: if hasValidProfile();
+      allow create: if isValidDocId(auditId)
+        && hasRole(['ADMIN', 'CASHIER', 'SALES', 'BUYER'])
+        && request.resource.data.id is string
+        && request.resource.data.id.size() <= 128
+        && request.resource.data.action is string
+        && request.resource.data.action.size() <= 128
+        && request.resource.data.summary is string
+        && request.resource.data.summary.size() <= 500;
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
